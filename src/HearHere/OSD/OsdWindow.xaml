@@ -1,0 +1,14 @@
+<Window x:Class="HearHere.OSD.OsdWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        Topmost="True" ShowInTaskbar="False" ShowActivated="False"
+        ResizeMode="NoResize" SizeToContent="WidthAndHeight"
+        Loaded="OnLoaded">
+    <Border CornerRadius="8" Background="#DD1E1E2E" Padding="18,12" MinWidth="260">
+        <StackPanel>
+            <TextBlock Text="HearHere" FontSize="12" Foreground="#88FFFFFF" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <TextBlock x:Name="DeviceNameText" FontSize="16" Foreground="White" TextWrapping="Wrap" MaxWidth="350"/>
+        </StackPanel>
+    </Border>
+</Window>
