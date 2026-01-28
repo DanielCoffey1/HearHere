@@ -11,10 +11,29 @@ dotnet build src/HearHere/HearHere.csproj
 dotnet run --project src/HearHere/HearHere.csproj
 ```
 
-Or publish a self-contained exe:
+Or publish a self-contained single-file exe:
 
 ```
-dotnet publish src/HearHere/HearHere.csproj -c Release -r win-x64 --self-contained
+dotnet publish src/HearHere/HearHere.csproj -c Release -o publish
+```
+
+## Building the Installer
+
+Requires [Inno Setup](https://jrsoftware.org/isdownload.php) (ensure `iscc` is on your PATH).
+
+One-click build + installer:
+
+```
+build.bat
+```
+
+This publishes the app and produces `publish/HearHereSetup.exe`.
+
+To run the steps manually:
+
+```
+dotnet publish src/HearHere/HearHere.csproj -c Release -o publish
+iscc installer/HearHere.iss
 ```
 
 ## Usage
