@@ -16,9 +16,11 @@ public partial class SettingsWindow : Window
     private readonly AppConfig _config;
     private readonly Action _onSaved;
     public ObservableCollection<DeviceViewModel> Devices { get; } = new();
+    public ObservableCollection<DeviceDefaultViewModel> Defaults { get; } = new();
 
     private HotkeyBinding _nextHotkey;
     private HotkeyBinding _prevHotkey;
+    private HotkeyBinding _defaultsHotkey;
 
     public SettingsWindow(AudioDeviceService audioService, AppConfig config, Action onSaved)
     {
@@ -28,6 +30,7 @@ public partial class SettingsWindow : Window
 
         _nextHotkey = new HotkeyBinding { Modifiers = config.NextDeviceHotkey.Modifiers, Key = config.NextDeviceHotkey.Key };
         _prevHotkey = new HotkeyBinding { Modifiers = config.PreviousDeviceHotkey.Modifiers, Key = config.PreviousDeviceHotkey.Key };
+        _defaultsHotkey = new HotkeyBinding { Modifiers = config.ApplyDefaultsHotkey.Modifiers, Key = config.ApplyDefaultsHotkey.Key };
 
         InitializeComponent();
 
@@ -36,6 +39,7 @@ public partial class SettingsWindow : Window
 
         NextHotkeyBox.Text = _nextHotkey.DisplayString;
         PrevHotkeyBox.Text = _prevHotkey.DisplayString;
+        DefaultsHotkeyBox.Text = _defaultsHotkey.DisplayString;
         StartupCheckBox.IsChecked = StartupHelper.IsEnabled;
     }
 
@@ -60,6 +64,50 @@ public partial class SettingsWindow : Window
 
         Devices.Clear();
         foreach (var d in ordered) Devices.Add(d);
+
+        RefreshDefaults(devices);
+    }
+
+    private void RefreshDefaults(List<AudioDevice> devices)
+    {
+        var previousDefaults = Defaults
+            .Where(d => !string.IsNullOrWhiteSpace(d.Id))
+            .GroupBy(d => d.Id)
+            .ToDictionary(g => g.Key, g => g.Last());
+        var configuredDefaults = _config.DeviceDefaults
+            .Where(d => !string.IsNullOrWhiteSpace(d.DeviceId))
+            .GroupBy(d => d.DeviceId)
+            .ToDictionary(g => g.Key, g => g.Last());
+        string? currentDefaultId = devices.FirstOrDefault(d => d.IsDefault)?.Id;
+
+        Defaults.Clear();
+        foreach (var dev in devices)
+        {
+            int volume = 50;
+            bool isPrimary = dev.Id == currentDefaultId;
+
+            if (configuredDefaults.TryGetValue(dev.Id, out var configured))
+            {
+                volume = configured.Volume;
+                isPrimary = configured.IsPrimary;
+            }
+            else if (previousDefaults.TryGetValue(dev.Id, out var previous))
+            {
+                volume = previous.Volume;
+                isPrimary = previous.IsPrimary;
+            }
+
+            Defaults.Add(new DeviceDefaultViewModel
+            {
+                Id = dev.Id,
+                DisplayName = dev.FriendlyName,
+                Volume = volume,
+                IsPrimary = isPrimary
+            });
+        }
+
+        if (!Defaults.Any(d => d.IsPrimary) && Defaults.Count > 0)
+            Defaults[0].IsPrimary = true;
     }
 
     private void OnRefresh(object sender, RoutedEventArgs e) => RefreshDevices();
@@ -87,7 +135,7 @@ public partial class SettingsWindow : Window
     private void OnHotkeyGotFocus(object sender, RoutedEventArgs e)
     {
         if (sender is System.Windows.Controls.TextBox tb)
-            tb.Text = "Press a key combination…";
+            tb.Text = "Press a key combination...";
     }
 
     private void OnHotkeyKeyDown(object sender, KeyEventArgs e)
@@ -107,9 +155,17 @@ public partial class SettingsWindow : Window
         {
             tb.Text = binding.DisplayString;
             if ((string)tb.Tag == "Next")
+            {
                 _nextHotkey = binding;
-            else
+            }
+            else if ((string)tb.Tag == "Prev")
+            {
                 _prevHotkey = binding;
+            }
+            else
+            {
+                _defaultsHotkey = binding;
+            }
         }
     }
 
@@ -123,28 +179,53 @@ public partial class SettingsWindow : Window
                 _nextHotkey = empty;
                 NextHotkeyBox.Text = "";
             }
-            else
+            else if ((string)btn.Tag == "Prev")
             {
                 _prevHotkey = empty;
                 PrevHotkeyBox.Text = "";
+            }
+            else
+            {
+                _defaultsHotkey = empty;
+                DefaultsHotkeyBox.Text = "";
             }
         }
     }
 
     private void OnSave(object sender, RoutedEventArgs e)
     {
-        // Conflict detection
-        if (!_nextHotkey.IsEmpty && !_prevHotkey.IsEmpty
-            && _nextHotkey.Modifiers == _prevHotkey.Modifiers && _nextHotkey.Key == _prevHotkey.Key)
+        var hotkeys = new[]
         {
-            MessageBox.Show("Next and Previous hotkeys cannot be the same.", "Hotkey Conflict",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            ("Next", _nextHotkey),
+            ("Previous", _prevHotkey),
+            ("Apply Defaults", _defaultsHotkey)
+        };
+
+        for (int i = 0; i < hotkeys.Length; i++)
+        {
+            for (int j = i + 1; j < hotkeys.Length; j++)
+            {
+                if (!hotkeys[i].Item2.IsEmpty && !hotkeys[j].Item2.IsEmpty
+                    && hotkeys[i].Item2.Modifiers == hotkeys[j].Item2.Modifiers
+                    && hotkeys[i].Item2.Key == hotkeys[j].Item2.Key)
+                {
+                    MessageBox.Show($"{hotkeys[i].Item1} and {hotkeys[j].Item1} hotkeys cannot be the same.", "Hotkey Conflict",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+            }
         }
 
         _config.EnabledDeviceIds = Devices.Where(d => d.IsEnabled).Select(d => d.Id).ToList();
         _config.NextDeviceHotkey = _nextHotkey;
         _config.PreviousDeviceHotkey = _prevHotkey;
+        _config.ApplyDefaultsHotkey = _defaultsHotkey;
+        _config.DeviceDefaults = Defaults.Select(d => new DeviceDefault
+        {
+            DeviceId = d.Id,
+            Volume = d.Volume,
+            IsPrimary = d.IsPrimary
+        }).ToList();
         _config.StartWithWindows = StartupCheckBox.IsChecked == true;
         _config.Save();
 
@@ -155,6 +236,21 @@ public partial class SettingsWindow : Window
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => Close();
+
+    private void OnPrimaryDefaultChecked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.CheckBox { DataContext: DeviceDefaultViewModel selected }
+            || !selected.IsPrimary)
+        {
+            return;
+        }
+
+        foreach (var deviceDefault in Defaults)
+        {
+            if (!ReferenceEquals(deviceDefault, selected))
+                deviceDefault.IsPrimary = false;
+        }
+    }
 }
 
 public class DeviceViewModel : INotifyPropertyChanged
@@ -174,6 +270,39 @@ public class DeviceViewModel : INotifyPropertyChanged
     {
         get => _isEnabled;
         set { _isEnabled = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsEnabled))); }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
+
+public class DeviceDefaultViewModel : INotifyPropertyChanged
+{
+    public string Id { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+
+    private int _volume = 50;
+    public int Volume
+    {
+        get => _volume;
+        set
+        {
+            int clamped = Math.Clamp(value, 0, 100);
+            if (_volume == clamped) return;
+            _volume = clamped;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Volume)));
+        }
+    }
+
+    private bool _isPrimary;
+    public bool IsPrimary
+    {
+        get => _isPrimary;
+        set
+        {
+            if (_isPrimary == value) return;
+            _isPrimary = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPrimary)));
+        }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

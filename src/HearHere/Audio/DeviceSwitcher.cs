@@ -96,4 +96,88 @@ public sealed class DeviceSwitcher
             return null;
         }
     }
+
+    /// <summary>Applies configured default endpoint, device volumes, and mixer resets.</summary>
+    public AudioDevice? ApplyDefaults()
+    {
+        var defaults = _config.DeviceDefaults
+            .Where(d => !string.IsNullOrWhiteSpace(d.DeviceId))
+            .ToList();
+
+        if (defaults.Count == 0)
+        {
+            Log.Write("No device defaults configured.");
+            return null;
+        }
+
+        var allDevices = _service.GetPlaybackDevices();
+        string? currentId = _service.GetDefaultDeviceId();
+        var primaryDefault = defaults.FirstOrDefault(d => d.IsPrimary);
+        if (primaryDefault == null)
+        {
+            Log.Write("No primary default device configured.");
+            return null;
+        }
+
+        var target = allDevices.FirstOrDefault(d => d.Id == primaryDefault.DeviceId);
+        if (target == null)
+        {
+            Log.Write("Primary default device is not currently active.");
+            return null;
+        }
+
+        foreach (var deviceDefault in defaults)
+        {
+            if (allDevices.All(d => d.Id != deviceDefault.DeviceId))
+            {
+                Log.Write($"Skipping unavailable default device: {deviceDefault.DeviceId}");
+                continue;
+            }
+
+            try
+            {
+                _service.SetDeviceVolume(deviceDefault.DeviceId, deviceDefault.Volume);
+            }
+            catch (Exception ex)
+            {
+                Log.Write($"Failed to set default volume for {deviceDefault.DeviceId}: {ex.Message}");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentId) && allDevices.Any(d => d.Id == currentId))
+        {
+            try
+            {
+                _service.ResetMixerSessions(currentId);
+            }
+            catch (Exception ex)
+            {
+                Log.Write($"Failed to reset current mixer sessions for {currentId}: {ex.Message}");
+            }
+        }
+
+        try
+        {
+            _service.SetDefaultDevice(target.Id);
+            if (currentId != target.Id)
+            {
+                try
+                {
+                    _service.ResetMixerSessions(target.Id);
+                }
+                catch (Exception ex)
+                {
+                    Log.Write($"Failed to reset primary mixer sessions for {target.Id}: {ex.Message}");
+                }
+            }
+
+            Log.Write($"Applied defaults and switched to primary: {target.FriendlyName}");
+            return target;
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"Failed to switch to primary default {target.FriendlyName}: {ex.Message}");
+            return null;
+        }
+    }
 }

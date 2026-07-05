@@ -10,6 +10,7 @@ namespace HearHere.Audio;
 /// </summary>
 public sealed class AudioDeviceService : IMMNotificationClient, IDisposable
 {
+    private const uint ClsCtxAll = 23;
     private readonly IMMDeviceEnumerator _enumerator;
     private bool _disposed;
 
@@ -109,6 +110,168 @@ public sealed class AudioDeviceService : IMMNotificationClient, IDisposable
         finally
         {
             Marshal.ReleaseComObject(policyConfig);
+        }
+    }
+
+    /// <summary>Sets a playback endpoint master volume as a percentage from 0 to 100 and unmutes it.</summary>
+    public void SetDeviceVolume(string deviceId, int volumePercent)
+    {
+        volumePercent = Math.Clamp(volumePercent, 0, 100);
+        var endpointVolumeId = typeof(IAudioEndpointVolume).GUID;
+        var eventContext = Guid.Empty;
+
+        int hr = _enumerator.GetDevice(deviceId, out var device);
+        if (hr != 0)
+            throw new COMException($"GetDevice failed (hr=0x{hr:X8})", hr);
+
+        try
+        {
+            hr = device.Activate(ref endpointVolumeId, ClsCtxAll, IntPtr.Zero, out var endpointObj);
+            if (hr != 0)
+                throw new COMException($"IAudioEndpointVolume activation failed (hr=0x{hr:X8})", hr);
+
+            var endpointVolume = (IAudioEndpointVolume)endpointObj;
+            try
+            {
+                float scalar = volumePercent / 100f;
+                int volumeHr = endpointVolume.SetMasterVolumeLevelScalar(scalar, ref eventContext);
+                int muteHr = endpointVolume.SetMute(false, ref eventContext);
+                if (volumeHr < 0)
+                    throw new COMException($"SetMasterVolumeLevelScalar failed (hr=0x{volumeHr:X8})", volumeHr);
+                if (muteHr < 0)
+                    throw new COMException($"SetMute failed (hr=0x{muteHr:X8})", muteHr);
+
+                Log.Write($"Volume for {deviceId} set to {volumePercent}%. SetMute hr=0x{muteHr:X8}.");
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(endpointVolume);
+            }
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(device);
+        }
+    }
+
+    /// <summary>Resets currently active app mixer sessions on a playback endpoint to 100% and unmuted.</summary>
+    public int ResetMixerSessions(string deviceId)
+    {
+        var sessionManagerId = typeof(IAudioSessionManager2).GUID;
+        var eventContext = Guid.Empty;
+
+        int hr = _enumerator.GetDevice(deviceId, out var device);
+        if (hr != 0)
+            throw new COMException($"GetDevice failed (hr=0x{hr:X8})", hr);
+
+        try
+        {
+            hr = device.Activate(ref sessionManagerId, ClsCtxAll, IntPtr.Zero, out var managerObj);
+            if (hr != 0)
+                throw new COMException($"IAudioSessionManager2 activation failed (hr=0x{hr:X8})", hr);
+
+            var manager = (IAudioSessionManager2)managerObj;
+            try
+            {
+                hr = manager.GetSessionEnumerator(out var sessionEnumerator);
+                if (hr != 0)
+                    throw new COMException($"GetSessionEnumerator failed (hr=0x{hr:X8})", hr);
+
+                try
+                {
+                    int countHr = sessionEnumerator.GetCount(out int count);
+                    if (countHr != 0)
+                        throw new COMException($"GetCount failed (hr=0x{countHr:X8})", countHr);
+
+                    int resetCount = 0;
+                    int failedCount = 0;
+                    for (int i = 0; i < count; i++)
+                    {
+                        int sessionHr = sessionEnumerator.GetSession(i, out var session);
+                        if (sessionHr != 0)
+                        {
+                            Log.Write($"GetSession({i}) failed for {deviceId}: 0x{sessionHr:X8}");
+                            failedCount++;
+                            continue;
+                        }
+
+                        try
+                        {
+                            if (TryGetSimpleAudioVolume(session, out var volume))
+                            {
+                                try
+                                {
+                                    int volumeHr = volume.SetMasterVolume(1.0f, ref eventContext);
+                                    int muteHr = volume.SetMute(false, ref eventContext);
+                                    if (volumeHr >= 0 && muteHr >= 0)
+                                    {
+                                        resetCount++;
+                                    }
+                                    else
+                                    {
+                                        Log.Write($"Mixer reset failed for session {i} on {deviceId}: volume=0x{volumeHr:X8} mute=0x{muteHr:X8}");
+                                        failedCount++;
+                                    }
+                                }
+                                finally
+                                {
+                                    Marshal.ReleaseComObject(volume);
+                                }
+                            }
+                            else
+                            {
+                                Log.Write($"Session {i} on {deviceId} does not expose ISimpleAudioVolume.");
+                                failedCount++;
+                            }
+                        }
+                        finally
+                        {
+                            Marshal.ReleaseComObject(session);
+                        }
+                    }
+
+                    Log.Write($"Reset {resetCount}/{count} mixer sessions for {deviceId}. Failures: {failedCount}.");
+                    return resetCount;
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(sessionEnumerator);
+                }
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(manager);
+            }
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(device);
+        }
+    }
+
+    private static bool TryGetSimpleAudioVolume(object session, out ISimpleAudioVolume volume)
+    {
+        volume = null!;
+        IntPtr sessionUnknown = IntPtr.Zero;
+        IntPtr volumeUnknown = IntPtr.Zero;
+        var volumeId = typeof(ISimpleAudioVolume).GUID;
+
+        try
+        {
+            sessionUnknown = Marshal.GetIUnknownForObject(session);
+            int hr = Marshal.QueryInterface(sessionUnknown, ref volumeId, out volumeUnknown);
+            if (hr != 0 || volumeUnknown == IntPtr.Zero)
+                return false;
+
+            volume = (ISimpleAudioVolume)Marshal.GetObjectForIUnknown(volumeUnknown);
+            return true;
+        }
+        finally
+        {
+            if (volumeUnknown != IntPtr.Zero)
+                Marshal.Release(volumeUnknown);
+            if (sessionUnknown != IntPtr.Zero)
+                Marshal.Release(sessionUnknown);
         }
     }
 

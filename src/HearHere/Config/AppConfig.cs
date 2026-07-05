@@ -29,6 +29,16 @@ public sealed class AppConfig
         Key = Key.F11
     };
 
+    /// <summary>Hotkey that restores the configured default device, endpoint volumes, and mixer sessions.</summary>
+    public HotkeyBinding ApplyDefaultsHotkey { get; set; } = new()
+    {
+        Modifiers = ModifierKeys.Control | ModifierKeys.Alt,
+        Key = Key.F12
+    };
+
+    /// <summary>Per-device volume defaults and the device to make primary when defaults are applied.</summary>
+    public List<DeviceDefault> DeviceDefaults { get; set; } = new();
+
     public bool StartWithWindows { get; set; }
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -68,4 +78,11 @@ public sealed class AppConfig
             Log.Write($"Failed to save config: {ex.Message}");
         }
     }
+}
+
+public sealed class DeviceDefault
+{
+    public string DeviceId { get; set; } = "";
+    public int Volume { get; set; } = 50;
+    public bool IsPrimary { get; set; }
 }

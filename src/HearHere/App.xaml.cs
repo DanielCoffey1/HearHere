@@ -82,6 +82,20 @@ public partial class App : Application
         }
     }
 
+    private void ApplyDefaults()
+    {
+        var device = _switcher.ApplyDefaults();
+        if (device != null)
+        {
+            OsdWindow.ShowToast($"Defaults: {device.FriendlyName}");
+            UpdateTooltip();
+        }
+        else
+        {
+            _tray.ShowBalloon("HearHere", "No primary defaults could be applied.", System.Windows.Forms.ToolTipIcon.Warning);
+        }
+    }
+
     private void UpdateTooltip()
     {
         var devices = _audioService.GetPlaybackDevices();
@@ -106,6 +120,13 @@ public partial class App : Application
             int id = _hotkeyManager.Register(_config.PreviousDeviceHotkey.Modifiers, _config.PreviousDeviceHotkey.Key,
                 () => DoSwitch(forward: false));
             if (id < 0) errors.Add($"Previous: {_config.PreviousDeviceHotkey.DisplayString}");
+        }
+
+        if (!_config.ApplyDefaultsHotkey.IsEmpty)
+        {
+            int id = _hotkeyManager.Register(_config.ApplyDefaultsHotkey.Modifiers, _config.ApplyDefaultsHotkey.Key,
+                ApplyDefaults);
+            if (id < 0) errors.Add($"Apply Defaults: {_config.ApplyDefaultsHotkey.DisplayString}");
         }
 
         if (errors.Count > 0)
